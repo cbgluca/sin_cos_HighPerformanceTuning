@@ -1,6 +1,6 @@
 # sin_cos_log_HighPerformanceTuning
 
-usare taylor per sin e cos, %2pigreco per riportarlo nell'intervallo di interesse
+usare taylor per sin e cos, %2pigreco per riportarlo nell'intervallo di interesse (invece di usare %, faccio: num - floor(num * 1/2pi))
 usare la libreria sus per ottimizzare la moltiplicazione ecc
 
 per il log idee:
