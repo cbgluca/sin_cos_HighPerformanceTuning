@@ -1,2 +1,2 @@
 all:
-	gcc -Wall -Wextra -O3 -Ofast -march=native -o programma_hpc main.c -lm
+	gcc -Ofast -march=native -o output/programma_hpc test.c -lm
