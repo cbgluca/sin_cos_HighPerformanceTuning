@@ -2,115 +2,86 @@
 
 #define N 10000000 // 10 milioni di elementi per avere un tempo misurabile
 
-// ==========================================
-// QUI METTERAI IL TUO CODICE
-// ==========================================
-void my_sin_avx(const float *in, float *out, int size)
-{
-    // Nota: 'size' dovrebbe essere un multiplo di 8 per semplicità,
-    // altrimenti devi gestire il "resto" degli elementi alla fine.
+double my_sin(double x){
+    //bringing it ot the right interval [-pi, +pi]
+    double test, x_2,x_3,x_5,x_7,x_9;
+    int f_3,f_5,f_7,f_9;
 
-    for (int i = 0; i < size; i += 8)
-    {
-        // 1. Carica 8 float dalla memoria allineata
-        __m256 x = _mm256_load_ps(&in[i]);
+    const double inv_pi = 1.0 / M_PI;
 
-        // 2. Fai la tua magia matematica qui (Taylor, Range reduction, ecc.)
-        // __m256 result = ...
+    int k = round(x * inv_pi);
 
-        // ESEMPIO DUMMY (Copia e basta, tu metti il vero calcolo):
-        __m256 result = x;
+    x = x - (k * M_PI);
 
-        // 3. Salva gli 8 risultati nella memoria allineata
-        _mm256_store_ps(&out[i], result);
-    }
+    x_2= x*x;
+    x_3= x_2*x;
+    x_5= x_3*x_2;
+    //x_7= x_5*x_2;
+    //x_9= x_7*x_2;
+
+    f_3 = 6;
+    f_5 = 120;
+    //f_7 = 5040;
+    //f_9 = 362880;
+
+    //test = x - x_3 * (1.0/f_3) + x_5 * (1.0/f_5) - x_7 * (1.0/f_7) + x_9 * (1.0/f_9);
+    test = x - x_3 * (1.0/f_3) + x_5 * (1.0/f_5);
+
+    //x = x - x_3 / f_3 + x_5 / f_5 - x_7 / f_7 + x_9 / f_9;
+    return (k & 1) ? -test : test; // if odd sin(x+pi) = -sin(x)
 }
 
 
+void my_sin_avx(const float* in, float* out, int size){
+
+    __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
+    __m256 vec_pi     = _mm256_set1_ps((float)M_PI);
+
+    float c_3 = 1.0f / 6.0f;
+    float c_5 = 1.0f / 120.0f;
+    __m256 vec_c3 = _mm256_set1_ps(c_3);
+    __m256 vec_c5 = _mm256_set1_ps(c_5);
+
+    int i;
+
+    
+    for (i=0; i <= size - 8; i += 8) {
+        __m256 vec_x = _mm256_load_ps(&in[i]);
+
+        // x * inv_pi
+        __m256 x_inv_pi = _mm256_mul_ps(vec_x, vec_inv_pi);
+
+        //__MM_FROUND_TO_NEAREST_INT when rounding to the nearest int it remains a __m256
+        __m256 v_k = _mm256_round_ps(x_inv_pi, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+
+        // (k * M_PI)
+        __m256 k_pi = _mm256_mul_ps(v_k, vec_pi);
+
+        // x = x - k_pi
+        vec_x = _mm256_sub_ps(vec_x, k_pi);
 
 
+        __m256 vec_x2 = _mm256_mul_ps(vec_x, vec_x);
+        __m256 vec_x3 = _mm256_mul_ps(vec_x2, vec_x);
+        __m256 vec_x5 = _mm256_mul_ps(vec_x3, vec_x2);
 
+        __m256 vec_result = _mm256_fnmadd_ps(vec_x3, vec_c3, vec_x);
+        vec_result = _mm256_fmadd_ps(vec_x5, vec_c5, vec_result);
+        //__m256 vec_term3 = _mm256_mul_ps(vec_x3, vec_c3);
+        //__m256 vec_term5 = _mm256_mul_ps(vec_x5, vec_c5);
 
+        //__m256 vec_res_parziale = _mm256_sub_ps(vec_x, vec_term3);
+        //__m256 vec_result       = _mm256_add_ps(vec_res_parziale, vec_term5);
 
+        __m256i k_int = _mm256_cvtps_epi32(v_k);
+        __m256i sign_mask = _mm256_slli_epi32(k_int, 31);
+        vec_result = _mm256_xor_ps(vec_result, _mm256_castsi256_ps(sign_mask));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Funzione di utilità per prendere il tempo in secondi
-double get_time()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec * 1e-9;
-}
-
-int main()
-{
-    // Allocazione allineata a 32-byte (fondamentale per AVX)
-    float *in = (float *)_mm_malloc(N * sizeof(float), 32);
-    float *out_std = (float *)_mm_malloc(N * sizeof(float), 32);
-    float *out_avx = (float *)_mm_malloc(N * sizeof(float), 32);
-
-    // Inizializza l'array con valori casuali tra -PI e PI
-    for (int i = 0; i < N; i++)
-    {
-        in[i] = ((float)rand() / RAND_MAX) * 2.0f * M_PI - M_PI;
+        _mm256_store_ps(&out[i], vec_result);
     }
-
-    // --- TEST FUNZIONE STANDARD (Benchmark di base) ---
-    double start_std = get_time();
-    for (int i = 0; i < N; i++)
-    {
-        out_std[i] = sinf(in[i]); // sinf è la versione per float a 32 bit
+    //for all the remaining floats that don't fit in a YMM, i use the my_sin() one by one
+    for (; i < size; i++) {
+        out[i] = my_sin(in[i]); 
     }
-    double end_std = get_time();
-    double time_std = end_std - start_std;
-
-    // --- TEST TUA FUNZIONE AVX ---
-    double start_avx = get_time();
-    my_sin_avx(in, out_avx, N);
-    double end_avx = get_time();
-    double time_avx = end_avx - start_avx;
-
-    // --- CALCOLO DELL'ERRORE MASSIMO ---
-    float max_error = 0.0f;
-    for (int i = 0; i < N; i++)
-    {
-        float error = fabsf(out_std[i] - out_avx[i]);
-        if (error > max_error)
-        {
-            max_error = error;
-        }
-    }
-
-    // --- STAMPA RISULTATI ---
-    printf("Risultati su %d milioni di elementi:\n", N / 1000000);
-    printf("Tempo Standard (sinf): %f secondi\n", time_std);
-    printf("Tempo Tuo AVX        : %f secondi\n", time_avx);
-    printf("Speedup (Acceleraz.): %.2f x\n", time_std / time_avx);
-    printf("Errore Massimo       : %e\n", max_error);
-
-    // Pulizia memoria
-    _mm_free(in);
-    _mm_free(out_std);
-    _mm_free(out_avx);
-
-    return 0;
+    
 }
