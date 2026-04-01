@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include<immintrin.h>
 #include<time.h>
+#include <stdint.h>
 
 //aggiunte
 #include <string.h>
