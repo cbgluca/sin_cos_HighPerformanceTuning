@@ -1,5 +1,5 @@
 all:
-	gcc -Wpsabi -Ofast -mfma -march=native -o output/programma_hpc testcos.c -lm
+	gcc -Wpsabi -Ofast -fopenmp-simd -mavx2 -mfma -march=native -o output/programma_hpc testcos.c -lm
 
 sin:
 	gcc -Wpsabi -Ofast -mfma -march=native -o output/programma_hpc testsin.c -lm

@@ -3,8 +3,8 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
-#include<immintrin.h>
-#include<time.h>
+#include <immintrin.h>
+#include <time.h>
 #include <stdint.h>
 
 //aggiunte
