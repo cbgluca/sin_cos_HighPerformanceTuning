@@ -1,11 +1,7 @@
-all:
-	gcc -Wpsabi -Ofast -fopenmp-simd -mavx2 -mfma -march=native -o output/programma_hpc testcos.c -lm
+all: bench_cos
 
-sin:
-	gcc -Wpsabi -Ofast -mfma -march=native -o output/programma_hpc testsin.c -lm
+bench_cos:
+	gcc -Wpsabi -Ofast -fopenmp-simd -mavx2 -mfma -march=native -o output/bench_cos cos.c bench_cos.c -lm
 
-log:
-	gcc -Wpsabi -Ofast -mfma -march=native -o output/programma_hpc log.c -lm
-
-test:
-	gcc -O3 -fno-math-errno -march=native -mfma -o output/programma_hpc testcos.c -lm
+bench_sin:
+	gcc -Wpsabi -Ofast -fopenmp-simd -mavx2 -mfma -march=native -o output/bench_sin sin.c bench_sin.c -lm

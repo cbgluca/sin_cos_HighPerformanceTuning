@@ -1,4 +1,21 @@
-.vscode/
+# Output directory and compiled binaries
 output/
+bin/
+obj/
+*.exe
+*.o
+*.obj
+*.out
 
+# Editor and IDE configurations
+.vscode/
+.vs/
+.idea/
+.DS_Store
+Thumbs.db
 
+# Legacy, testing, and scratch files
+testcos.c
+testsin.c
+log.c
+testlog

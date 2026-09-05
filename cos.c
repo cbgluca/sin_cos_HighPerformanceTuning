@@ -1,208 +1,268 @@
-#include "lib.h"
+#include "cos.h"
 
-#define N 10000000 // 10 milioni di elementi per avere un tempo misurabile
-
-double my_cos(double x){
-    //bringing it ot the right interval [-pi, +pi]
-    double test, x_2,x_4;
-
+/**
+ * @brief Scalar implementation of cosine using range reduction and 4th-degree Taylor expansion.
+ *
+ * Algorithm explanation:
+ * 1. Range reduction:
+ *    Any input angle x can be expressed as:
+ *       x = k * PI + x_reduced, where k = round(x / PI)
+ *    This maps x_reduced strictly into the interval [-PI/2, +PI/2].
+ * 2. Taylor approximation:
+ *    cos(x_reduced) ≈ 1 - (x_reduced^2 / 2!) + (x_reduced^4 / 4!)
+ * 3. Sign reconstruction:
+ *    Since cos(x_reduced + k * PI) = (-1)^k * cos(x_reduced):
+ *    If k is odd, the result is inverted; otherwise it stays positive.
+ *
+ * @param x Input angle in radians.
+ * @return Approximate cosine value.
+ */
+double my_cos(double x)
+{
     const double inv_pi = 1.0 / M_PI;
 
-    int k = round(x * inv_pi);
+    // k represents the number of PI half-periods
+    int k = (int)round(x * inv_pi);
 
-    x = x - (k * M_PI);
+    // Reduced angle in [-PI/2, +PI/2]
+    x = x - ((double)k * M_PI);
 
-    x_2= x*x;
-    x_4= x_2*x_2;
-    //x_6 = x_4*x_2;
-    //x_8 = x_6 * x_2;
+    double x_2 = x * x;
+    double x_4 = x_2 * x_2;
 
-    // 1 - x_2 * (1.0/2.0) + x_4 * (1.0/24.0) + x_6 * (1.0/720.0) + x_8 * (1.0/40320.0);
-    test = 1.0 - x_2 * (1.0/2.0) + x_4 * (1.0/24.0);
+    // 4th-degree Taylor series: 1 - x^2 / 2 + x^4 / 24
+    double result = 1.0 - (x_2 * (1.0 / 2.0)) + (x_4 * (1.0 / 24.0));
 
-    return (k & 1) ? -test : test; // if odd cos(x+pi) = -cos(x)
+    // If k is odd, flip sign; if k is even, keep positive
+    return (k & 1) ? -result : result;
 }
 
+/**
+ * @brief AVX2 vectorized cosine using 4th-degree Taylor expansion.
+ *        Processes 8 single-precision floats simultaneously using 256-bit YMM registers.
+ *
+ * Vector steps:
+ * 1. Load 8 floats into YMM register.
+ * 2. Multiply by (1 / PI) and round to nearest integer using _MM_FROUND_TO_NEAREST_INT.
+ * 3. Compute reduced angle x = x - (k * PI).
+ * 4. Compute x^2 and x^4.
+ * 5. Evaluate Taylor polynomial using fused multiply-add (FMA) instructions:
+ *      result = 1.0 - x^2 * (1/2) + x^4 * (1/24)
+ * 6. Convert k to 32-bit integer, shift left by 31 bits to align with IEEE 754 sign bit,
+ *    and XOR with the result (toggles the sign bit when k is odd).
+ * 7. Store 8 results to output array.
+ * 8. Any remaining elements (size % 8) are computed using the scalar fallback.
+ *
+ * @param in Pointer to input float array.
+ * @param out Pointer to destination float array.
+ * @param size Total number of elements.
+ */
+void my_cos_avx(const float *in, float *out, int size)
+{
+    const __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
+    const __m256 vec_pi     = _mm256_set1_ps((float)M_PI);
+    const __m256 vec_c2     = _mm256_set1_ps(0.5f);        // 1/2!
+    const __m256 vec_c4     = _mm256_set1_ps(1.0f / 24.0f); // 1/4!
+    const __m256 vec_1      = _mm256_set1_ps(1.0f);
 
-void my_cos_avx(const float* in, float* out, int size)
-{ // very inconsistent from 1.2x slower to 1.1x faster, max err 1.996897e-02
+    int i = 0;
 
-    __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
-    __m256 vec_pi     = _mm256_set1_ps((float)M_PI);
-
-    float c_2 = 1.0f / 2.0f;
-    float c_4 = 1.0f / 24.0f;
-    __m256 vec_c2 = _mm256_set1_ps(c_2);
-    __m256 vec_c4 = _mm256_set1_ps(c_4);
-    __m256 vec_1 = _mm256_set1_ps(1.0f);
-
-    int i;
-    
-    for (i=0; i <= size - 8; i += 8) {
+    // Process 8 floats per vector iteration
+    for (; i + 8 <= size; i += 8)
+    {
         __m256 vec_x = _mm256_load_ps(&in[i]);
 
-        // x * inv_pi
+        // k = round(x / PI)
         __m256 x_inv_pi = _mm256_mul_ps(vec_x, vec_inv_pi);
-
-        //__MM_FROUND_TO_NEAREST_INT when rounding to the nearest int it remains a __m256
         __m256 v_k = _mm256_round_ps(x_inv_pi, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 
-        // (k * M_PI)
+        // x_reduced = x - (k * PI)
         __m256 k_pi = _mm256_mul_ps(v_k, vec_pi);
-
-        // x = x - k_pi
         vec_x = _mm256_sub_ps(vec_x, k_pi);
 
-
+        // Compute powers of x: x^2 and x^4
         __m256 vec_x2 = _mm256_mul_ps(vec_x, vec_x);
         __m256 vec_x4 = _mm256_mul_ps(vec_x2, vec_x2);
-        //__m256 vec_x6 = _mm256_mul_ps(vec_x4, vec_x2);
 
+        // Evaluate: 1.0 - 0.5 * x^2 + (1/24) * x^4 using FMA
+        // fnmadd: -(vec_x2 * vec_c2) + vec_1
         __m256 vec_result = _mm256_fnmadd_ps(vec_x2, vec_c2, vec_1);
+        // fmadd: (vec_x4 * vec_c4) + vec_result
         vec_result = _mm256_fmadd_ps(vec_x4, vec_c4, vec_result);
-        //__m256 vec_term3 = _mm256_mul_ps(vec_x2, vec_c2);
-        //__m256 vec_term5 = _mm256_mul_ps(vec_x4, vec_c4);
 
-        //__m256 vec_res_parziale = _mm256_sub_ps(vec_x, vec_term3);
-        //__m256 vec_result       = _mm256_add_ps(vec_res_parziale, vec_term5);
-
+        // Sign correction: if k is odd, flip sign bit (bit 31)
         __m256i k_int = _mm256_cvtps_epi32(v_k);
         __m256i sign_mask = _mm256_slli_epi32(k_int, 31);
         vec_result = _mm256_xor_ps(vec_result, _mm256_castsi256_ps(sign_mask));
 
         _mm256_store_ps(&out[i], vec_result);
     }
-    //for all the remaining floats that don't fit in a YMM, i use the my_cos() one by one
-    for (; i < size; i++) {
-        out[i] = my_cos(in[i]); 
+
+    // Scalar fallback loop for remaining elements
+    for (; i < size; i++)
+    {
+        out[i] = (float)my_cos((double)in[i]);
     }
 }
 
+/**
+ * @brief AVX2 vectorized cosine using 4th-degree Minimax (Chebyshev) polynomial with Horner's scheme.
+ *
+ * Why Minimax?
+ * - Standard Taylor series is centered at 0, which makes error grow rapidly near |x| ≈ PI/2.
+ * - The Minimax polynomial distributes the approximation error uniformly across [-PI/2, +PI/2],
+ *   substantially reducing the maximum error (from ~2.0e-2 down to ~5.97e-4).
+ *
+ * Horner's Method:
+ * - Polynomial: P(x) = c0 + c2 * x^2 + c4 * x^4
+ * - Horner's form: P(x) = c0 + x^2 * (c2 + x^2 * c4)
+ * - Requires only 2 FMA instructions instead of separate powers and additions.
+ *
+ * @param in Pointer to input float array.
+ * @param out Pointer to destination float array.
+ * @param size Total number of elements.
+ */
 void my_cos_avx_minimax(const float *in, float *out, int size)
-{ // consistent 1.1x faster, max err: 5.970597e-04
+{
+    const __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
+    const __m256 vec_pi     = _mm256_set1_ps((float)M_PI);
 
-    __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
-    __m256 vec_pi = _mm256_set1_ps((float)M_PI);
+    // Minimax coefficients for degree-4 approximation of cos(x) on [-PI/2, PI/2]
+    const __m256 vec_c0 = _mm256_set1_ps(0.9994032f);
+    const __m256 vec_c2 = _mm256_set1_ps(-0.4955807f);
+    const __m256 vec_c4 = _mm256_set1_ps(0.0367916f);
 
-    __m256 vec_c0 = _mm256_set1_ps(0.9994032f);
-    __m256 vec_c2 = _mm256_set1_ps(-0.4955807f);
-    __m256 vec_c4 = _mm256_set1_ps(0.0367916f);
+    int i = 0;
 
-    int i;
-
-    for (i = 0; i <= size - 8; i += 8)
+    // Process 8 floats per vector iteration
+    for (; i + 8 <= size; i += 8)
     {
         __m256 vec_x = _mm256_load_ps(&in[i]);
 
-        // x * inv_pi
+        // Range reduction: k = round(x / PI)
         __m256 x_inv_pi = _mm256_mul_ps(vec_x, vec_inv_pi);
-
-        //__MM_FROUND_TO_NEAREST_INT when rounding to the nearest int it remains a __m256
         __m256 v_k = _mm256_round_ps(x_inv_pi, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 
-        // (k * M_PI)
+        // x_reduced = x - (k * PI)
         __m256 k_pi = _mm256_mul_ps(v_k, vec_pi);
-
-        // x = x - k_pi
         vec_x = _mm256_sub_ps(vec_x, k_pi);
 
-        //x is now in [-pi/2 , +pi/2]
-        //chebychev coefficients
-
-
+        // x^2
         __m256 vec_x2 = _mm256_mul_ps(vec_x, vec_x);
 
-        // Calcolo di P(x) = c_0 + c_2 * x^2 + c_4 * x^4
-        // HORNER METHOD to skip 1 operation: P(x) = c_0 + x^2 * (c_2 + x^2 * c_4)
-
+        // Horner's evaluation: c0 + x^2 * (c2 + x^2 * c4)
+        // Step 1: (x^2 * c4) + c2
         __m256 vec_result = _mm256_fmadd_ps(vec_x2, vec_c4, vec_c2);
+        // Step 2: (result * x^2) + c0
         vec_result = _mm256_fmadd_ps(vec_result, vec_x2, vec_c0);
 
-
-        __m256i k_int = _mm256_cvtps_epi32(v_k); //converts from float to epi32
-        __m256i sign_mask = _mm256_slli_epi32(k_int, 31); //left shit, to get sign
-        vec_result = _mm256_xor_ps(vec_result, _mm256_castsi256_ps(sign_mask)); //cats is a bypass to make xor work. tricks xor to think its a float and not a epi32
+        // Sign correction via bitwise XOR:
+        // Convert k to integer, shift LSB to bit 31, and XOR with the float result
+        __m256i k_int = _mm256_cvtps_epi32(v_k);
+        __m256i sign_mask = _mm256_slli_epi32(k_int, 31);
+        vec_result = _mm256_xor_ps(vec_result, _mm256_castsi256_ps(sign_mask));
 
         _mm256_store_ps(&out[i], vec_result);
     }
-    // for all the remaining floats that don't fit in a YMM, i use the my_cos() one by one
+
+    // Scalar fallback loop for remaining elements
     for (; i < size; i++)
     {
-        out[i] = my_cos(in[i]);
+        out[i] = (float)my_cos((double)in[i]);
     }
 }
 
+/**
+ * @brief Highly optimized AVX2 cosine using Minimax polynomial with 4x loop unrolling.
+ *
+ * Microarchitectural Optimizations:
+ * 1. 4x Loop Unrolling (32 floats / 128 bytes per iteration):
+ *    Processes 4 YMM registers in parallel. This breaks serial dependency chains,
+ *    hides FMA and load latencies (typically 4-5 cycles), and maximizes instruction-level
+ *    parallelism (ILP) on modern out-of-order execution pipelines.
+ * 2. Single-instruction Range Reduction:
+ *    Uses _mm256_fnmadd_ps(k, PI, x) which computes -(k * PI) + x in a single cycle,
+ *    eliminating an explicit multiplication and subtraction.
+ * 3. Interleaved Pipeline Execution:
+ *    Interleaving independent operations across registers x0..x3 allows CPU execution ports
+ *    to remain 100% saturated without stalling on register dependencies.
+ *
+ * @param in Pointer to input float array (must be 32-byte aligned for maximum throughput).
+ * @param out Pointer to destination float array (must be 32-byte aligned).
+ * @param size Total number of elements.
+ */
 void my_cos_avx_minimax_unrolled(const float *in, float *out, int size)
 {
-    // 1. Costanti fuori dal ciclo per evitare memory load ridondanti
-    __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
-    __m256 vec_pi = _mm256_set1_ps((float)M_PI);
-    __m256 vec_c0 = _mm256_set1_ps(0.9994032f);
-    __m256 vec_c2 = _mm256_set1_ps(-0.4955807f);
-    __m256 vec_c4 = _mm256_set1_ps(0.0367916f);
+    // Constants kept in registers outside the loop to prevent redundant loads
+    const __m256 vec_inv_pi = _mm256_set1_ps(1.0f / (float)M_PI);
+    const __m256 vec_pi     = _mm256_set1_ps((float)M_PI);
+    const __m256 vec_c0     = _mm256_set1_ps(0.9994032f);
+    const __m256 vec_c2     = _mm256_set1_ps(-0.4955807f);
+    const __m256 vec_c4     = _mm256_set1_ps(0.0367916f);
 
-    int i;
+    int i = 0;
 
-    // 2. Loop Unrolling x4: elabora 32 float per iterazione
-    for (i = 0; i <= size - 32; i += 32)
+    // Process 32 floats (4 x 8-float YMM registers) per iteration
+    for (; i + 32 <= size; i += 32)
     {
-        // Caricamento indipendente per saturare la banda L1
+        // 1. Independent loads across 4 vector registers
         __m256 x0 = _mm256_load_ps(&in[i]);
         __m256 x1 = _mm256_load_ps(&in[i + 8]);
         __m256 x2 = _mm256_load_ps(&in[i + 16]);
         __m256 x3 = _mm256_load_ps(&in[i + 24]);
 
-        // Calcolo k = round(x * inv_pi)
+        // 2. Compute k = round(x / PI)
         __m256 k0 = _mm256_round_ps(_mm256_mul_ps(x0, vec_inv_pi), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
         __m256 k1 = _mm256_round_ps(_mm256_mul_ps(x1, vec_inv_pi), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
         __m256 k2 = _mm256_round_ps(_mm256_mul_ps(x2, vec_inv_pi), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
         __m256 k3 = _mm256_round_ps(_mm256_mul_ps(x3, vec_inv_pi), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 
-        // x = x - k*pi ottimizzato in una singola FMA: x = -(k*pi) + x
+        // 3. Fused range reduction: x = -(k * PI) + x
         x0 = _mm256_fnmadd_ps(k0, vec_pi, x0);
         x1 = _mm256_fnmadd_ps(k1, vec_pi, x1);
         x2 = _mm256_fnmadd_ps(k2, vec_pi, x2);
         x3 = _mm256_fnmadd_ps(k3, vec_pi, x3);
 
-        // x^2
+        // 4. Compute x^2
         __m256 x0_2 = _mm256_mul_ps(x0, x0);
         __m256 x1_2 = _mm256_mul_ps(x1, x1);
         __m256 x2_2 = _mm256_mul_ps(x2, x2);
         __m256 x3_2 = _mm256_mul_ps(x3, x3);
 
-        // Polinomio Minimax: c_0 + x^2 * (c_2 + x^2 * c_4)
-        // Alternare le istruzioni nasconde la latenza di FMA
+        // 5. Horner's evaluation step 1: (x^2 * c4) + c2
         __m256 res0 = _mm256_fmadd_ps(x0_2, vec_c4, vec_c2);
         __m256 res1 = _mm256_fmadd_ps(x1_2, vec_c4, vec_c2);
         __m256 res2 = _mm256_fmadd_ps(x2_2, vec_c4, vec_c2);
         __m256 res3 = _mm256_fmadd_ps(x3_2, vec_c4, vec_c2);
 
+        // 6. Horner's evaluation step 2: (res * x^2) + c0
         res0 = _mm256_fmadd_ps(res0, x0_2, vec_c0);
         res1 = _mm256_fmadd_ps(res1, x1_2, vec_c0);
         res2 = _mm256_fmadd_ps(res2, x2_2, vec_c0);
         res3 = _mm256_fmadd_ps(res3, x3_2, vec_c0);
 
-        // Maschera del segno
+        // 7. Extract sign mask from k
         __m256i sign_mask0 = _mm256_slli_epi32(_mm256_cvtps_epi32(k0), 31);
         __m256i sign_mask1 = _mm256_slli_epi32(_mm256_cvtps_epi32(k1), 31);
         __m256i sign_mask2 = _mm256_slli_epi32(_mm256_cvtps_epi32(k2), 31);
         __m256i sign_mask3 = _mm256_slli_epi32(_mm256_cvtps_epi32(k3), 31);
 
+        // 8. Apply sign flip via bitwise XOR
         res0 = _mm256_xor_ps(res0, _mm256_castsi256_ps(sign_mask0));
         res1 = _mm256_xor_ps(res1, _mm256_castsi256_ps(sign_mask1));
         res2 = _mm256_xor_ps(res2, _mm256_castsi256_ps(sign_mask2));
         res3 = _mm256_xor_ps(res3, _mm256_castsi256_ps(sign_mask3));
 
-        // Store
-        _mm256_store_ps(&out[i], res0);
-        _mm256_store_ps(&out[i + 8], res1);
+        // 9. Store 32 computed floats
+        _mm256_store_ps(&out[i],      res0);
+        _mm256_store_ps(&out[i + 8],  res1);
         _mm256_store_ps(&out[i + 16], res2);
         _mm256_store_ps(&out[i + 24], res3);
     }
 
-    // Coda per gli elementi rimanenti
+    // Scalar fallback loop for remaining elements
     for (; i < size; i++)
     {
-        out[i] = my_cos(in[i]);
+        out[i] = (float)my_cos((double)in[i]);
     }
 }

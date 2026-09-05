@@ -31,10 +31,10 @@ int main()
     const int iterazioni = 250000;                            // Un quarto di milione di passaggi per durare ~1 secondo
     const double ops_totali = (double)N * (double)iterazioni; // ~1 Miliardo di float calcolati
 
-    printf("=== BENCHMARK ALGORITMICO IN CACHE L1 ===\n");
+    printf("=== BENCHMARK IN L1 CACHE ===\n");
     printf("Array Size: %d elementi (16 KB)\n", N);
-    printf("Iterazioni: %d\n", iterazioni);
-    printf("Volume Tot: %.0f float processati\n\n", ops_totali);
+    printf("Iterations: %d\n", iterazioni);
+    printf("Total Volume: %.0f float processed\n\n", ops_totali);
 
     float *in = (float *)_mm_malloc(N * sizeof(float), 32);
     float *out_std = (float *)_mm_malloc(N * sizeof(float), 32);
@@ -64,7 +64,7 @@ int main()
     double start_my = get_time();
     for (int k = 0; k < iterazioni; k++)
     {
-        rust_cos_avx_port(in, out_my, N);
+        my_cos_avx_minimax_unrolled(in, out_my, N);
     }
     double time_my = get_time() - start_my;
     double thr_my = ops_totali / time_my;
@@ -74,7 +74,7 @@ int main()
     double start_my2 = get_time();
     for (int k = 0; k < iterazioni; k++)
     {
-        rust_cos_avx_port_optimized(in, out_my2, N);
+        my_cos_avx_minimax(in, out_my2, N);
     }
     double time_my2 = get_time() - start_my2;
     double thr_my2 = ops_totali / time_my2;
@@ -88,22 +88,22 @@ int main()
 
     // --- RISULTATI ---
     printf("[1] math.h (Scalare/Auto-Vec)\n");
-    printf("    Tempo totale : %f s\n", time_std);
+    printf("    Total Time   : %f s\n", time_std);
     printf("    Throughput   : %.2e ops/sec\n", thr_std);
-    printf("    Latenza media: %.2f ns/op\n\n", lat_std);
+    printf("    Average Latency: %.2f ns/op\n\n", lat_std);
 
     printf("[2] my_cos_avx_minimax_unrolled\n");
-    printf("    Tempo totale : %f s\n", time_my);
+    printf("    Total Time   : %f s\n", time_my);
     printf("    Throughput   : %.2e ops/sec\n", thr_my);
-    printf("    Latenza media: %.2f ns/op\n\n", lat_my);
+    printf("    Average Latency: %.2f ns/op\n\n", lat_my);
 
-    printf("[3] not\n");
-    printf("    Tempo totale : %f s\n", time_my2);
+    printf("[3] my_cos_avx_minimax\n");
+    printf("    Total Time   : %f s\n", time_my2);
     printf("    Throughput   : %.2e ops/sec\n", thr_my2);
-    printf("    Latenza media: %.2f ns/op\n\n", lat_my2);
+    printf("    Average Latency: %.2f ns/op\n\n", lat_my2);
 
-    printf(">>> VANTAGGIO ARCHITETTURALE: %.2fx <<<\n\n", time_std / time_my);
-    printf(">>> VANTAGGIO ARCHITETTURALE2: %.2fx <<<\n\n", time_std / time_my2);
+    printf(">>> ARCHITECTURAL ADVANTAGE: %.2fx <<<\n\n", time_std / time_my);
+    printf(">>> ARCHITECTURAL ADVANTAGE 2: %.2fx <<<\n\n", time_std / time_my2);
 
     // Evita che il compilatore rimuova sum_dummy
     if (sum_dummy == 0.0f)
@@ -112,6 +112,7 @@ int main()
     _mm_free(in);
     _mm_free(out_std);
     _mm_free(out_my);
+    _mm_free(out_my2);
     return 0;
 }
 
